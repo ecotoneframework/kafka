@@ -5,13 +5,10 @@ declare(strict_types=1);
 namespace Ecotone\Kafka\Outbound;
 
 use Ecotone\Kafka\Configuration\KafkaAdmin;
-use Ecotone\Kafka\Configuration\KafkaPublisherConfiguration;
-use Ecotone\Messaging\Channel\PollableChannel\Serialization\OutboundMessageConverter;
 use Ecotone\Messaging\Config\Container\Definition;
 use Ecotone\Messaging\Config\Container\MessagingContainerBuilder;
 use Ecotone\Messaging\Config\Container\Reference;
 use Ecotone\Messaging\Conversion\ConversionService;
-use Ecotone\Messaging\Conversion\MediaType;
 use Ecotone\Messaging\Handler\MessageHandlerBuilder;
 
 /**
@@ -20,17 +17,15 @@ use Ecotone\Messaging\Handler\MessageHandlerBuilder;
 class KafkaOutboundChannelAdapterBuilder implements MessageHandlerBuilder
 {
     private function __construct(
-        private KafkaPublisherConfiguration $configuration,
-        private ?MediaType $outputConversionMediaType,
-        private string $inputChannelName = '',
-        private ?string $endpointId = null
+        private string $endpointId,
+        private string $inputChannelName = ''
     ) {
 
     }
 
-    public static function create(KafkaPublisherConfiguration $configuration, ?MediaType $outputConversionMediaType): self
+    public static function create(string $endpointId): self
     {
-        return new self($configuration, $outputConversionMediaType);
+        return new self(endpointId:  $endpointId);
     }
 
     public function withInputChannelName(string $inputChannelName)
@@ -59,22 +54,15 @@ class KafkaOutboundChannelAdapterBuilder implements MessageHandlerBuilder
 
     public function compile(MessagingContainerBuilder $builder): Definition
     {
-        $outboundMessageConverter = new Definition(OutboundMessageConverter::class, [
-            $this->configuration->getHeaderMapper(),
-            $this->outputConversionMediaType,
-        ]);
-
         return new Definition(KafkaOutboundChannelAdapter::class, [
             $this->endpointId,
             new Reference(KafkaAdmin::class),
-            Reference::to($this->configuration->getBrokerConfigurationReference()),
-            $outboundMessageConverter,
             new Reference(ConversionService::REFERENCE_NAME),
         ]);
     }
 
     public function __toString(): string
     {
-        return KafkaOutboundChannelAdapter::class . ' for ' . $this->configuration->getReferenceName();
+        return KafkaOutboundChannelAdapter::class;
     }
 }

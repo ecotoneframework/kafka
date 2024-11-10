@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Ecotone\Kafka\Outbound;
 
 use Ecotone\Kafka\Configuration\KafkaAdmin;
-use Ecotone\Kafka\Configuration\KafkaBrokerConfiguration;
 use Ecotone\Messaging\Channel\PollableChannel\Serialization\OutboundMessageConverter;
 use Ecotone\Messaging\Conversion\ConversionService;
 use Ecotone\Messaging\Message;
@@ -16,13 +15,16 @@ use Ecotone\Messaging\MessageHandler;
  */
 final class KafkaOutboundChannelAdapter implements MessageHandler
 {
+    private OutboundMessageConverter $outboundMessageConverter;
+
     public function __construct(
         private string $referenceName,
         private KafkaAdmin                  $kafkaAdmin,
-        private KafkaBrokerConfiguration    $brokerConfiguration,
-        protected OutboundMessageConverter  $outboundMessageConverter,
         private ConversionService           $conversionService
     ) {
+        $headerMapper = $kafkaAdmin->getConfigurationForPublisher($referenceName)->getHeaderMapper();
+
+        $this->outboundMessageConverter = new OutboundMessageConverter($headerMapper);
     }
 
     /**
@@ -30,8 +32,8 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
      */
     public function handle(Message $message): void
     {
-        $producer = $this->kafkaAdmin->getProducer($this->referenceName, $this->brokerConfiguration);
-        $topic = $this->kafkaAdmin->getTopicForProducer($this->referenceName, $this->brokerConfiguration);
+        $producer = $this->kafkaAdmin->getProducer($this->referenceName);
+        $topic = $this->kafkaAdmin->getTopicForProducer($this->referenceName);
         $outboundMessage = $this->outboundMessageConverter->prepare($message, $this->conversionService);
 
         $topic->producev(

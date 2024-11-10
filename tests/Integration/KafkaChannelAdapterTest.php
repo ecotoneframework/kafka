@@ -19,13 +19,14 @@ use Test\Ecotone\Kafka\Fixture\ChannelAdapter\ExampleKafkaConfiguration;
 use Test\Ecotone\Kafka\Fixture\ChannelAdapter\ExampleKafkaConsumer;
 
 /**
+ * licence Enterprise
  * @internal
  */
 final class KafkaChannelAdapterTest extends TestCase
 {
     public function test_sending_and_receiving_from_kafka_topic(): void
     {
-        $this->markTestSkipped('CI yet to be setup');
+        $this->markTestSkipped('Kafka not yet supported');
 
         $ecotoneLite = EcotoneLite::bootstrapFlowTesting(
             [ExampleKafkaConsumer::class, ExampleKafkaConfiguration::class],
