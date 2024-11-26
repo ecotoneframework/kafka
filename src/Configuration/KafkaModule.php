@@ -26,12 +26,16 @@ use Ecotone\Messaging\Handler\Gateway\ParameterToMessageConverter\GatewayHeaders
 use Ecotone\Messaging\Handler\Gateway\ParameterToMessageConverter\GatewayHeaderValueBuilder;
 use Ecotone\Messaging\Handler\Gateway\ParameterToMessageConverter\GatewayPayloadBuilder;
 use Ecotone\Messaging\Handler\InterfaceToCallRegistry;
+use Ecotone\Messaging\Handler\Logger\LoggingGateway;
 use Ecotone\Messaging\MessageHeaders;
 use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Messaging\Support\LicensingException;
 
 /**
  * licence Enterprise
+ *
+ * @link https://www.confluent.io/blog/how-to-send-messages-with-librdkafka/  Details about producing messages
+ * @link https://github.com/confluentinc/librdkafka/wiki/FAQ#why-is-there-no-sync-produce-interface general faq on librdkafka
  */
 #[ModuleAnnotation]
 final class KafkaModule extends NoExternalConfigurationModule implements AnnotationModule
@@ -66,6 +70,7 @@ final class KafkaModule extends NoExternalConfigurationModule implements Annotat
         $serviceConfiguration = ExtensionObjectResolver::resolveUnique(ServiceConfiguration::class, $extensionObjects, ServiceConfiguration::createWithDefaults());
         $consumerConfigurations = [];
         $topicConfigurations = [];
+        $topicReferenceMapping = [];
         $publisherConfigurations = [];
         $kafkaBrokerConfigurations = [];
         $kafkaConsumers = $this->kafkaConsumers;
@@ -80,7 +85,7 @@ final class KafkaModule extends NoExternalConfigurationModule implements Annotat
                 $publisherConfigurations[$extensionObject->getMessageChannelName()] = KafkaPublisherConfiguration::createWithDefaults(
                     $extensionObject->topicName,
                     MessagePublisher::class . '::' . $extensionObject->getMessageChannelName(),
-                )->enableKafkaDebugging();
+                );
             }
         }
 
@@ -88,7 +93,8 @@ final class KafkaModule extends NoExternalConfigurationModule implements Annotat
             if ($extensionObject instanceof KafkaConsumerConfiguration) {
                 $consumerConfigurations[$extensionObject->getEndpointId()] = $consumerConfigurations;
             } elseif ($extensionObject instanceof TopicConfiguration) {
-                $topicConfigurations[$extensionObject->getTopicName()] = $topicConfigurations;
+                $topicConfigurations[$extensionObject->getTopicName()] = $extensionObject;
+                $topicReferenceMapping[$extensionObject->referenceName] = $extensionObject->getTopicName();
             } elseif ($extensionObject instanceof KafkaPublisherConfiguration) {
                 $publisherConfigurations[$this->getPublisherEndpointId($extensionObject->getReferenceName())] = $extensionObject;
                 $this->registerMessagePublisher($messagingConfiguration, $extensionObject, $serviceConfiguration);
@@ -119,6 +125,8 @@ final class KafkaModule extends NoExternalConfigurationModule implements Annotat
                 $topicConfigurations,
                 $publisherConfigurations,
                 $kafkaBrokerConfigurations,
+                $topicReferenceMapping,
+                Reference::to(LoggingGateway::class),
                 $serviceConfiguration->isModulePackageEnabled(ModulePackageList::TEST_PACKAGE),
             ])
         );
