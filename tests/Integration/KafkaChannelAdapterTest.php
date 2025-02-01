@@ -15,11 +15,9 @@ use Ecotone\Messaging\Endpoint\ExecutionPollingMetadata;
 use Ecotone\Messaging\Handler\Logger\EchoLogger;
 use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Test\LicenceTesting;
-
-use function getenv;
-
 use PHPUnit\Framework\TestCase;
 use Ramsey\Uuid\Uuid;
+use Test\Ecotone\Kafka\ConnectionTestCase;
 use Test\Ecotone\Kafka\Fixture\ChannelAdapter\ExampleKafkaConsumer;
 
 /**
@@ -32,9 +30,7 @@ final class KafkaChannelAdapterTest extends TestCase
     {
         $ecotoneLite = EcotoneLite::bootstrapFlowTesting(
             [ExampleKafkaConsumer::class],
-            [KafkaBrokerConfiguration::class => KafkaBrokerConfiguration::createWithDefaults([
-                getenv('KAFKA_DSN') ?? 'localhost:9094',
-            ]), new ExampleKafkaConsumer(), 'logger' => new EchoLogger()],
+            [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(), new ExampleKafkaConsumer(), 'logger' => new EchoLogger()],
             ServiceConfiguration::createWithDefaults()
                 ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
                 ->withExtensionObjects([
