@@ -19,6 +19,7 @@ use Ecotone\Test\StubLogger;
 
 use function getenv;
 
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\TestCase;
 use Ramsey\Uuid\Uuid;
 use Test\Ecotone\Kafka\ConnectionTestCase;
@@ -38,6 +39,7 @@ use Test\Ecotone\Kafka\Fixture\Handler\KafkaAsyncEventHandler;
  * licence Enterprise
  * @internal
  */
+#[RunTestsInSeparateProcesses]
 final class KafkaMessageChannelTest extends TestCase
 {
     public function test_connecting_to_non_existing_topic()
