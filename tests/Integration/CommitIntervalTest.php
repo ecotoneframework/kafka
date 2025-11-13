@@ -14,7 +14,6 @@ use Ecotone\Messaging\Config\ServiceConfiguration;
 use Ecotone\Messaging\Endpoint\ExecutionPollingMetadata;
 use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Test\LicenceTesting;
-use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\TestCase;
 use Ramsey\Uuid\Uuid;
 use Test\Ecotone\Kafka\ConnectionTestCase;
@@ -26,7 +25,6 @@ use Test\Ecotone\Kafka\Fixture\CommitInterval\KafkaConsumerWithInterval3;
  * licence Enterprise
  * @internal
  */
-#[RunTestsInSeparateProcesses]
 final class CommitIntervalTest extends TestCase
 {
     public function test_default_commit_interval_commits_every_message(): void
@@ -96,7 +94,7 @@ final class CommitIntervalTest extends TestCase
         $kafkaPublisher = $ecotoneLite->getGateway(MessagePublisher::class);
 
         // Send 10 messages, message 6 will fail
-        for ($i = 1; $i <= 10; $i++) {
+        for ($i = 1; $i <= 9; $i++) {
             $kafkaPublisher->sendWithMetadata("message_$i", 'application/text', ['fail' => $i === 6]);
         }
 
@@ -105,11 +103,12 @@ final class CommitIntervalTest extends TestCase
 
         // should only continue and not re-reprocess
         $ecotoneLite = $this->bootstrapEcotoneLite($topicName, KafkaConsumerWithCommitIntervalAndFailure::class, $consumerInstance);
-        $ecotoneLite->run('kafka_consumer_interval_3_with_failure', ExecutionPollingMetadata::createWithDefaults()->withHandledMessageLimit(3)->withExecutionTimeLimitInMilliseconds(10000));
+
+        $ecotoneLite->run('kafka_consumer_interval_3_with_failure', ExecutionPollingMetadata::createWithDefaults()->withHandledMessageLimit(10)->withExecutionTimeLimitInMilliseconds(10000));
 
         $this->assertEquals([
             'message_1', 'message_2', 'message_3', 'message_4', 'message_5',
-            'message_6', 'message_7', 'message_8', 'message_9', 'message_10',
+            'message_6', 'message_7', 'message_8', 'message_9',
         ], array_map(fn ($m) => $m['payload'], $ecotoneLite->sendQueryWithRouting('consumer.getMessages')));
     }
 

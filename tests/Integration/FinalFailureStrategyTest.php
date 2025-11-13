@@ -15,7 +15,6 @@ use Ecotone\Messaging\Endpoint\FinalFailureStrategy;
 use Ecotone\Modelling\Attribute\CommandHandler;
 use Ecotone\Test\LicenceTesting;
 use Exception;
-use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\TestCase;
 use Ramsey\Uuid\Nonstandard\Uuid;
 use Test\Ecotone\Kafka\ConnectionTestCase;
@@ -27,7 +26,6 @@ use Test\Ecotone\Kafka\ConnectionTestCase;
  * licence Apache-2.0
  * @internal
  */
-#[RunTestsInSeparateProcesses]
 final class FinalFailureStrategyTest extends TestCase
 {
     public function test_single_message_redelivered_and_processed_correctly()
@@ -213,7 +211,7 @@ final class FinalFailureStrategyTest extends TestCase
                     KafkaMessageChannelBuilder::create(
                         channelName: 'kafka_channel',
                         topicName: $topicName,
-                        groupId: $sharedGroupId
+                        messageGroupId: $sharedGroupId
                     )
                         ->withFinalFailureStrategy(FinalFailureStrategy::IGNORE)
                         ->withReceiveTimeout(10000),
@@ -268,7 +266,7 @@ final class FinalFailureStrategyTest extends TestCase
                     KafkaMessageChannelBuilder::create(
                         channelName: 'kafka_channel',
                         topicName: $topicName,
-                        groupId: Uuid::uuid4()->toString()
+                        messageGroupId: Uuid::uuid4()->toString()
                     )
                         ->withFinalFailureStrategy(FinalFailureStrategy::IGNORE)
                         ->withReceiveTimeout(10000),
@@ -305,7 +303,7 @@ final class FinalFailureStrategyTest extends TestCase
                     KafkaMessageChannelBuilder::create(
                         channelName: 'kafka_channel',
                         topicName: $topicName,
-                        groupId: Uuid::uuid4()->toString()
+                        messageGroupId: Uuid::uuid4()->toString()
                     )
                         ->withFinalFailureStrategy(FinalFailureStrategy::IGNORE)
                         ->withReceiveTimeout(10000),
