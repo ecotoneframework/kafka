@@ -8,7 +8,7 @@ use Ecotone\Kafka\Configuration\KafkaBrokerConfiguration;
 use Ecotone\Kafka\Configuration\KafkaPublisherConfiguration;
 use Ecotone\Kafka\Outbound\MessagePublishingException;
 use Ecotone\Lite\EcotoneLite;
-use Ecotone\Messaging\Channel\AsyncPublishing\PublishingFailedException;
+use Ecotone\Messaging\Channel\DeliveryConfirmation\PublishingFailedException;
 use Ecotone\Messaging\Config\ModulePackageList;
 use Ecotone\Messaging\Config\ServiceConfiguration;
 use Ecotone\Messaging\MessagePublisher;
@@ -23,7 +23,7 @@ use Test\Ecotone\Kafka\ConnectionTestCase;
  * @internal
  */
 #[RunTestsInSeparateProcesses]
-final class AsyncPublishingReliabilityTest extends TestCase
+final class HighThroughputPublishingReliabilityTest extends TestCase
 {
     public function test_broker_rejected_message_fails_synchronous_fallback_of_async_publisher(): void
     {
@@ -38,7 +38,7 @@ final class AsyncPublishingReliabilityTest extends TestCase
     {
         $publisher = $this->bootstrapPublisher();
 
-        $future = $publisher->asyncPublish(str_repeat('x', 2_000_000));
+        $future = $publisher->publishDeferred(str_repeat('x', 2_000_000));
 
         $this->expectException(PublishingFailedException::class);
 
@@ -74,7 +74,7 @@ final class AsyncPublishingReliabilityTest extends TestCase
                 ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
                 ->withExtensionObjects([
                     KafkaPublisherConfiguration::createWithDefaults(topicName: Uuid::v7()->toRfc4122())
-                        ->withAsyncPublishing(timeoutInMilliseconds: 10000)
+                        ->withHighThroughputPublishing(confirmationTimeoutInMilliseconds: 10000)
                         ->setConfiguration('message.max.bytes', '4000000'),
                 ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
