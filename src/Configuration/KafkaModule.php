@@ -22,6 +22,7 @@ use Ecotone\Messaging\Config\Container\Reference;
 use Ecotone\Messaging\Config\ModuleReferenceSearchService;
 use Ecotone\Messaging\Config\ServiceConfiguration;
 use Ecotone\Messaging\Conversion\MediaType;
+use Ecotone\Messaging\Handler\ExpressionEvaluationService;
 use Ecotone\Messaging\Handler\Gateway\GatewayProxyBuilder;
 use Ecotone\Messaging\Handler\Gateway\ParameterToMessageConverter\GatewayHeaderBuilder;
 use Ecotone\Messaging\Handler\Gateway\ParameterToMessageConverter\GatewayHeadersBuilder;
@@ -164,6 +165,7 @@ final class KafkaModule extends NoExternalConfigurationModule implements Annotat
                 $kafkaBrokerConfigurations,
                 $topicReferenceMapping,
                 Reference::to(LoggingGateway::class),
+                Reference::to(ExpressionEvaluationService::REFERENCE),
             ])
         );
     }
