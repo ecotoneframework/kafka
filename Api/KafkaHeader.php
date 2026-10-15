@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Ecotone\Kafka\Api;
+namespace Ecotone\Api\Kafka;
 
 /**
  * licence Enterprise
+ *
+ * Use requires an Ecotone Enterprise licence (see LICENSE-ENTERPRISE; trial: https://ecotone.tech/pricing).
  */
 interface KafkaHeader
 {
