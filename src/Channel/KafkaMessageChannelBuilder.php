@@ -2,38 +2,31 @@
 
 declare(strict_types=1);
 
-namespace Ecotone\Api\Kafka;
+namespace Ecotone\Kafka\Channel;
 
-use Ecotone\Api\ExtensionObject\FinalFailureStrategy;
-use Ecotone\Api\ExtensionObject\MediaType;
-use Ecotone\Kafka\Channel\KafkaMessageChannel;
-use Ecotone\Kafka\Configuration\KafkaAdmin;
 use Ecotone\Kafka\Configuration\KafkaConsumerConfiguration;
 use Ecotone\Kafka\Inbound\KafkaInboundChannelAdapterBuilder;
 use Ecotone\Kafka\Outbound\KafkaOutboundChannelAdapterBuilder;
-use Ecotone\Kafka\Pulse\KafkaChannelDepthProbe;
-use Ecotone\Messaging\Channel\DepthProbedMessageChannelBuilder;
 use Ecotone\Messaging\Channel\MessageChannelWithSerializationBuilder;
 use Ecotone\Messaging\Config\Container\Definition;
 use Ecotone\Messaging\Config\Container\MessagingContainerBuilder;
 use Ecotone\Messaging\Config\Container\Reference;
+use Ecotone\Messaging\Conversion\MediaType;
+use Ecotone\Messaging\Endpoint\FinalFailureStrategy;
 use Ecotone\Messaging\MessageConverter\DefaultHeaderMapper;
 use Ecotone\Messaging\MessageConverter\HeaderMapper;
 use Ecotone\Messaging\Support\Assert;
 
 /**
  * licence Enterprise
- *
- * Use requires an Ecotone Enterprise licence (see LICENSE-ENTERPRISE; trial: https://ecotone.tech/pricing).
  */
-final class KafkaMessageChannelBuilder implements MessageChannelWithSerializationBuilder, DepthProbedMessageChannelBuilder
+final class KafkaMessageChannelBuilder implements MessageChannelWithSerializationBuilder
 {
     private KafkaInboundChannelAdapterBuilder $inboundChannelAdapterBuilder;
     private KafkaOutboundChannelAdapterBuilder $outboundChannelAdapterBuilder;
     private string $headerMapper;
     private ?MediaType $conversionMediaType = null;
     private bool $batchPublishing = false;
-    private bool $requireExistingDestination = false;
     private bool $nonBlockingConfirmation = false;
     private ?int $confirmationTimeout = null;
 
@@ -58,7 +51,6 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
                 $this->inboundChannelAdapterBuilder
                     ->compile($builder),
                 $this->outboundChannelAdapterBuilder
-                    ->withRequiredExistingDestination($this->requireExistingDestination)
                     ->withHeaderMapper($this->getHeaderMapper())
                     ->withDefaultConversionMediaType($this->conversionMediaType?->toString())
                     ->compile($builder),
@@ -67,7 +59,8 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
     }
 
     /**
-     * @link https://docs.ecotone.tech/modules/kafka-support/message-channel
+     * @param string|null $topicName If null, channel name will be used as topic name
+     * @param string|null $messageGroupId If null, channel name will be used as message group id. This the default consumer group for Consumer with id equal to channel name
      */
     public static function create(
         string  $channelName,
@@ -79,13 +72,6 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
             $topicName ?? $channelName,
             $messageGroupId ?? $channelName,
         );
-    }
-
-    public function withRequiredExistingDestination(): self
-    {
-        $this->requireExistingDestination = true;
-
-        return $this;
     }
 
     public function getConversionMediaType(): ?MediaType
@@ -115,6 +101,9 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
     }
 
     /**
+     * How long it should try to receive message
+     *
+     * @param int $timeoutInMilliseconds
      * @return static
      */
     public function withReceiveTimeout(int $timeoutInMilliseconds): self
@@ -132,7 +121,9 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
     }
 
     /**
-     * @link https://docs.ecotone.tech/modules/kafka-support/message-channel#high-throughput-publishing-enterprise
+     * @param bool $batchPublishing coalesces produced Messages into broker side batches by enabling producer lingering
+     * @param bool $nonBlockingConfirmation produces without flushing, delivery reports are awaited before the surrounding Command Bus or asynchronous endpoint finishes
+     * @param int|null $confirmationTimeoutInMilliseconds how long to await delivery reports before treating the delivery as failed
      */
     public function withHighThroughputPublishing(bool $batchPublishing = true, bool $nonBlockingConfirmation = true, ?int $confirmationTimeoutInMilliseconds = null): self
     {
@@ -144,21 +135,6 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
         }
 
         return $this;
-    }
-
-    public function depthProbeGroup(): string
-    {
-        return 'kafka';
-    }
-
-    public function depthProbeDestination(): string
-    {
-        return $this->channelName;
-    }
-
-    public function depthProbeDefinition(): Definition
-    {
-        return new Definition(KafkaChannelDepthProbe::class, [Reference::to(KafkaAdmin::class)]);
     }
 
     public function isBatchPublishingEnabled(): bool
@@ -177,6 +153,9 @@ final class KafkaMessageChannelBuilder implements MessageChannelWithSerializatio
     }
 
     /**
+     * Set the commit interval in messages. Offsets will be committed every X messages.
+     *
+     * @param int $commitIntervalInMessages Number of messages to process before committing offset
      * @return static
      */
     public function withCommitInterval(int $commitIntervalInMessages): self

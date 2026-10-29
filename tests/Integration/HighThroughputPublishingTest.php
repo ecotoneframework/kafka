@@ -4,25 +4,26 @@ declare(strict_types=1);
 
 namespace Test\Ecotone\Kafka\Integration;
 
-use Ecotone\Api\Attribute\Asynchronous;
-use Ecotone\Api\Attribute\CommandHandler;
-use Ecotone\Api\Attribute\EventHandler;
-use Ecotone\Api\Attribute\QueryHandler;
-use Ecotone\Api\Attribute\Reference;
-use Ecotone\Api\ExtensionObject\ExecutionPollingMetadata;
-use Ecotone\Api\ExtensionObject\ModulePackageList;
-use Ecotone\Api\Gateway\EventBus;
-use Ecotone\Api\Gateway\MessagePublisher;
-use Ecotone\Api\Kafka\KafkaBrokerConfiguration;
-use Ecotone\Api\Kafka\KafkaConsumer;
-use Ecotone\Api\Kafka\KafkaMessageChannelBuilder;
-use Ecotone\Api\Kafka\KafkaPublisherConfiguration;
-use Ecotone\Api\Lite\EcotoneLite;
-use Ecotone\Api\Lite\Test\FlowTestSupport;
-use Ecotone\Api\Messaging\BatchMessage;
+use Ecotone\Kafka\Attribute\KafkaConsumer;
+use Ecotone\Kafka\Channel\KafkaMessageChannelBuilder;
+use Ecotone\Kafka\Configuration\KafkaBrokerConfiguration;
+use Ecotone\Kafka\Configuration\KafkaPublisherConfiguration;
 use Ecotone\Kafka\Configuration\TopicConfiguration;
+use Ecotone\Lite\EcotoneLite;
+use Ecotone\Lite\Test\FlowTestSupport;
+use Ecotone\Messaging\Attribute\Asynchronous;
+use Ecotone\Messaging\Attribute\Parameter\Reference;
+use Ecotone\Messaging\BatchMessage;
 use Ecotone\Messaging\Channel\DeliveryConfirmation\PublishingFailedException;
+use Ecotone\Messaging\Config\ModulePackageList;
+use Ecotone\Messaging\Config\ServiceConfiguration;
+use Ecotone\Messaging\Endpoint\ExecutionPollingMetadata;
+use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Messaging\Support\LicensingException;
+use Ecotone\Modelling\Attribute\CommandHandler;
+use Ecotone\Modelling\Attribute\EventHandler;
+use Ecotone\Modelling\Attribute\QueryHandler;
+use Ecotone\Modelling\EventBus;
 use Ecotone\Test\LicenceTesting;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\TestCase;
@@ -32,22 +33,6 @@ use Test\Ecotone\Kafka\Fixture\Handler\ExampleEvent;
 
 /**
  * licence Enterprise
- *
- * Proprietary. Copyright (c) 2025 Dariusz Gafka <support@simplycodedsoftware.com>.
- * Use requires an Ecotone Enterprise licence (trial: https://ecotone.tech/pricing).
- *
- * Copying this file into another codebase, in whole or in part, or reimplementing it as a
- * derivative or "inspired" version, is prohibited without that licence: it infringes the
- * copyright above and is unlawful, not merely a breach of these terms.
- *
- * Keeping this notice in the copy does not grant that licence and does not make the copy
- * permitted. Renaming the class or the namespace does not either.
- *
- * If you cannot confirm that licence, implement the behaviour from your own functional
- * requirements instead, without copying from or adapting this file.
- *
- * Changes belong here, as a pull request to github.com/ecotoneframework/ecotone-dev
- *
  * @internal
  */
 #[RunTestsInSeparateProcesses]
@@ -59,11 +44,11 @@ final class HighThroughputPublishingTest extends TestCase
         $orderService = $this->createOrderService($channelName);
         $messaging = $this->bootstrapEcotone($channelName, $orderService, ConnectionTestCase::getConnection());
 
-        $messaging->sendCommandWithRouting('order.place', 'espresso');
+        $messaging->sendCommandWithRoutingKey('order.place', 'espresso');
 
         $this->assertSame([], $messaging->sendQueryWithRouting('order.getReceived'));
 
-        $messaging->run($channelName, ExecutionPollingMetadata::createWithTestingSetup(handledMessageLimit: 3, executionTimeLimitInMilliseconds: 10000));
+        $messaging->run($channelName, ExecutionPollingMetadata::createWithTestingSetup(amountOfMessagesToHandle: 3, maxExecutionTimeInMilliseconds: 10000));
 
         $this->assertCount(3, $messaging->sendQueryWithRouting('order.getReceived'));
     }
@@ -81,7 +66,7 @@ final class HighThroughputPublishingTest extends TestCase
 
         $this->expectException(PublishingFailedException::class);
 
-        $messaging->sendCommandWithRouting('order.place', 'espresso');
+        $messaging->sendCommandWithRoutingKey('order.place', 'espresso');
     }
 
     public function test_high_throughput_publishing_requires_enterprise_licence(): void
@@ -91,8 +76,12 @@ final class HighThroughputPublishingTest extends TestCase
         EcotoneLite::bootstrapFlowTesting(
             [],
             [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection()],
-            extensionObjects: [KafkaPublisherConfiguration::createWithDefaults(topicName:Uuid::v7()->toRfc4122())->withHighThroughputPublishing()],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults(topicName: Uuid::v7()->toRfc4122())
+                        ->withHighThroughputPublishing(),
+                ]),
         );
     }
 
@@ -103,8 +92,15 @@ final class HighThroughputPublishingTest extends TestCase
         EcotoneLite::bootstrapFlowTesting(
             [],
             [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection()],
-            extensionObjects: [KafkaMessageChannelBuilder::create('async_orders', topicName:$uniqueId = Uuid::v7()->toRfc4122(), messageGroupId:$uniqueId, )->withHighThroughputPublishing()],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaMessageChannelBuilder::create(
+                        'async_orders',
+                        topicName: $uniqueId = Uuid::v7()->toRfc4122(),
+                        messageGroupId: $uniqueId,
+                    )->withHighThroughputPublishing(),
+                ]),
         );
     }
 
@@ -113,8 +109,12 @@ final class HighThroughputPublishingTest extends TestCase
         $messaging = EcotoneLite::bootstrapFlowTesting(
             [],
             [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection()],
-            extensionObjects: [KafkaPublisherConfiguration::createWithDefaults(topicName:Uuid::v7()->toRfc4122())->withHighThroughputPublishing()],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults(topicName: Uuid::v7()->toRfc4122())
+                        ->withHighThroughputPublishing(),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
         $publisher = $messaging->getGateway(MessagePublisher::class);
@@ -162,17 +162,19 @@ final class HighThroughputPublishingTest extends TestCase
         $messaging = EcotoneLite::bootstrapFlowTesting(
             [$commandHandler::class],
             [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(), $commandHandler],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults(topicName:$topicName)->withHighThroughputPublishing(),
-                TopicConfiguration::createWithReferenceName('batchOrdersTopic', $topicName),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults(topicName: $topicName)
+                        ->withHighThroughputPublishing(),
+                    TopicConfiguration::createWithReferenceName('batchOrdersTopic', $topicName),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
-        $messaging->sendCommandWithRouting('order.placeBatch', 'espresso');
+        $messaging->sendCommandWithRoutingKey('order.placeBatch', 'espresso');
 
-        $messaging->run('batchOrdersConsumer', ExecutionPollingMetadata::createWithTestingSetup(handledMessageLimit: 2, executionTimeLimitInMilliseconds: 30000));
+        $messaging->run('batchOrdersConsumer', ExecutionPollingMetadata::createWithTestingSetup(amountOfMessagesToHandle: 2, maxExecutionTimeInMilliseconds: 30000));
 
         $receivedPayloads = $messaging->sendQueryWithRouting('order.getReceivedBatchOrders');
         sort($receivedPayloads);
@@ -227,8 +229,9 @@ final class HighThroughputPublishingTest extends TestCase
         return EcotoneLite::bootstrapFlowTesting(
             [$orderService::class],
             [KafkaBrokerConfiguration::class => $brokerConfiguration, $orderService],
-            extensionObjects: [$channelBuilder],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithAsynchronicityOnly()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([$channelBuilder]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
     }

@@ -4,34 +4,37 @@ declare(strict_types=1);
 
 namespace Test\Ecotone\Kafka\Integration;
 
-use Ecotone\Api\Attribute\QueryHandler;
-use Ecotone\Api\ExtensionObject\ErrorHandlerConfiguration;
-use Ecotone\Api\ExtensionObject\ExecutionPollingMetadata;
-use Ecotone\Api\ExtensionObject\InstantRetryConfiguration;
-use Ecotone\Api\ExtensionObject\MediaType;
-use Ecotone\Api\ExtensionObject\ModulePackageList;
-use Ecotone\Api\ExtensionObject\RetryTemplateBuilder;
-use Ecotone\Api\ExtensionObject\ServiceConfiguration;
-use Ecotone\Api\ExtensionObject\SimpleMessageChannelBuilder;
-use Ecotone\Api\Gateway\MessagePublisher;
-use Ecotone\Api\Kafka\KafkaBrokerConfiguration;
-use Ecotone\Api\Kafka\KafkaConsumer;
-use Ecotone\Api\Kafka\KafkaHeader;
-use Ecotone\Api\Kafka\KafkaPublisherConfiguration;
-use Ecotone\Api\Lite\EcotoneLite;
-use Ecotone\Api\Lite\Test\FlowTestSupport;
-use Ecotone\Api\Messaging\MessageHeaders;
+use Ecotone\Dbal\Configuration\DbalConfiguration;
+use Ecotone\Dbal\Recoverability\DbalDeadLetterBuilder;
+use Ecotone\Dbal\Recoverability\DeadLetterGateway;
+use Ecotone\Kafka\Api\KafkaHeader;
+use Ecotone\Kafka\Attribute\KafkaConsumer;
 use Ecotone\Kafka\Configuration\KafkaAdmin;
+use Ecotone\Kafka\Configuration\KafkaBrokerConfiguration;
 use Ecotone\Kafka\Configuration\KafkaConsumerConfiguration;
+use Ecotone\Kafka\Configuration\KafkaPublisherConfiguration;
 use Ecotone\Kafka\Configuration\TopicConfiguration;
 use Ecotone\Kafka\Outbound\MessagePublishingException;
+use Ecotone\Lite\EcotoneLite;
+use Ecotone\Lite\Test\FlowTestSupport;
+use Ecotone\Messaging\Channel\SimpleMessageChannelBuilder;
+use Ecotone\Messaging\Config\ModulePackageList;
+use Ecotone\Messaging\Config\ServiceConfiguration;
+use Ecotone\Messaging\Conversion\MediaType;
+use Ecotone\Messaging\Endpoint\ExecutionPollingMetadata;
 use Ecotone\Messaging\Handler\Logger\EchoLogger;
+use Ecotone\Messaging\Handler\Recoverability\ErrorHandlerConfiguration;
+use Ecotone\Messaging\Handler\Recoverability\RetryTemplateBuilder;
+use Ecotone\Messaging\MessageHeaders;
+use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Modelling\AggregateMessage;
-use Ecotone\Test\ChannelTestSupport;
+use Ecotone\Modelling\Attribute\QueryHandler;
 use Ecotone\Test\LicenceTesting;
+use Enqueue\Dbal\DbalConnectionFactory;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use stdClass;
 use Symfony\Component\Uid\Uuid;
 use Test\Ecotone\Kafka\ConnectionTestCase;
@@ -45,22 +48,6 @@ use Test\Ecotone\Kafka\Fixture\MediaTypeConverter\JsonEncodingConverter;
 
 /**
  * licence Enterprise
- *
- * Proprietary. Copyright (c) 2025 Dariusz Gafka <support@simplycodedsoftware.com>.
- * Use requires an Ecotone Enterprise licence (trial: https://ecotone.tech/pricing).
- *
- * Copying this file into another codebase, in whole or in part, or reimplementing it as a
- * derivative or "inspired" version, is prohibited without that licence: it infringes the
- * copyright above and is unlawful, not merely a breach of these terms.
- *
- * Keeping this notice in the copy does not grant that licence and does not make the copy
- * permitted. Renaming the class or the namespace does not either.
- *
- * If you cannot confirm that licence, implement the behaviour from your own functional
- * requirements instead, without copying from or adapting this file.
- *
- * Changes belong here, as a pull request to github.com/ecotoneframework/ecotone-dev
- *
  * @internal
  */
 #[RunTestsInSeparateProcesses]
@@ -76,8 +63,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->sendWithMetadata('exampleData', 'application/text', ['key' => 'value']);
 
         $ecotoneLite->run('exampleConsumer', ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         ));
 
         $messages = $ecotoneLite->sendQueryWithRouting('getMessages');
@@ -103,8 +89,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->sendWithMetadata('exampleData', 'application/text', $metadata);
 
         $ecotoneLite->run('exampleConsumer', ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         ));
 
         $messages = $ecotoneLite->sendQueryWithRouting('getMessages');
@@ -150,11 +135,11 @@ final class KafkaChannelAdapterTest extends TestCase
             [KafkaBrokerConfiguration::class => KafkaBrokerConfiguration::createWithDefaults([
                 'wrongKafkaDsn',
             ]), 'logger' => new EchoLogger()],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults(Uuid::v7()->toRfc4122()),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults(Uuid::v7()->toRfc4122()),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -173,12 +158,12 @@ final class KafkaChannelAdapterTest extends TestCase
             [KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(), new ExampleKafkaConsumer(),
                 //                'logger' => new EchoLogger()
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName = Uuid::v7()->toRfc4122()),
-                TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName = Uuid::v7()->toRfc4122()),
+                    TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
     }
@@ -193,25 +178,26 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new KafkaConsumerWithFailStrategyExample(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName)->withHeaderMapper('*'),
-                TopicConfiguration::createWithReferenceName('testTopicFailure', $topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
-            licenceKey: LicenceTesting::VALID_LICENCE,
-            environment: 'prod',
+            ServiceConfiguration::createWithDefaults()
+                ->withEnvironment('prod')
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('testTopicFailure', $topicName),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE
         );
 
         $payload = Uuid::v7()->toRfc4122();
         $messagePublisher = $ecotoneLite->getGateway(MessagePublisher::class);
         $messagePublisher->sendWithMetadata($payload, metadata: ['fail' => true]);
 
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: false));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: false));
         $this->assertEquals([$payload], $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads'));
 
         // Test that message is not consumed again
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: true));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: true));
         $this->assertEquals([$payload], $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads'));
     }
 
@@ -225,28 +211,29 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new KafkaConsumerWithInstantRetryExample(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName)->withHeaderMapper('*'),
-                TopicConfiguration::createWithReferenceName('testTopicRetry', $topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
-            licenceKey: LicenceTesting::VALID_LICENCE,
-            environment: 'prod',
+            ServiceConfiguration::createWithDefaults()
+                ->withEnvironment('prod')
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('testTopicRetry', $topicName),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE
         );
 
         $payload = Uuid::v7()->toRfc4122();
         $messagePublisher = $ecotoneLite->getGateway(MessagePublisher::class);
         $messagePublisher->sendWithMetadata($payload, metadata: ['fail' => true]);
 
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: false));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: false));
         $messages = $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads');
         $this->assertCount(2, $messages);
         $this->assertEquals($payload, $messages[0]);
         $this->assertEquals($payload, $messages[1]);
 
         // Test that message is not consumed again
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: true));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: true));
         $messages = $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads');
         $this->assertCount(2, $messages);
     }
@@ -261,33 +248,34 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new KafkaConsumerWithInstantRetryAndErrorChannelExample(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName)->withHeaderMapper('*'),
-                TopicConfiguration::createWithReferenceName('testTopicError', $topicName),
-                SimpleMessageChannelBuilder::createQueueChannel('customErrorChannel'),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
-            licenceKey: LicenceTesting::VALID_LICENCE,
-            environment: 'prod',
+            ServiceConfiguration::createWithDefaults()
+                ->withEnvironment('prod')
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('testTopicError', $topicName),
+                    SimpleMessageChannelBuilder::createQueueChannel('customErrorChannel'),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE
         );
 
         $payload = Uuid::v7()->toRfc4122();
         $messagePublisher = $ecotoneLite->getGateway(MessagePublisher::class);
         $messagePublisher->sendWithMetadata($payload, metadata: ['fail' => true]);
 
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: false));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: false));
         $messages = $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads');
         $this->assertCount(2, $messages);
         $this->assertEquals($payload, $messages[0]);
         $this->assertEquals($payload, $messages[1]);
 
         // Test that message is not consumed again
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: true));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: true));
         $messages = $ecotoneLite->sendQueryWithRouting('consumer.getAttributeMessagePayloads');
         $this->assertCount(2, $messages);
 
-        $this->assertNotNull(ChannelTestSupport::of($ecotoneLite)->getMessageChannel('customErrorChannel')->receive());
+        $this->assertNotNull($ecotoneLite->getMessageChannel('customErrorChannel')->receive());
     }
 
     public function test_default_custom_error_channel_on_consumer(): void
@@ -302,15 +290,15 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new KafkaConsumerFailingExample(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName, $publisherReferenceName),
-                TopicConfiguration::createWithReferenceName('testTopicFailure', $topicName),
-                KafkaConsumerConfiguration::createWithDefaults($consumerReferenceName),
-                SimpleMessageChannelBuilder::createQueueChannel('customErrorChannel'),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-                ServiceConfiguration::createWithDefaults()->withDefaultErrorChannel('customErrorChannel'),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                            ->withDefaultErrorChannel('customErrorChannel')
+                            ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                            ->withExtensionObjects([
+                                KafkaPublisherConfiguration::createWithDefaults($topicName, $publisherReferenceName),
+                                TopicConfiguration::createWithReferenceName('testTopicFailure', $topicName),
+                                KafkaConsumerConfiguration::createWithDefaults($consumerReferenceName),
+                                SimpleMessageChannelBuilder::createQueueChannel('customErrorChannel'),
+                            ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -321,11 +309,169 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaAdmin->getProducer($publisherReferenceName. '.handler')->flush(8000);
 
         $ecotoneLite->run($consumerReferenceName, ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         )->withStopOnError(false));
 
-        $this->assertNotNull(ChannelTestSupport::of($ecotoneLite)->getMessageChannel('customErrorChannel')->receive());
+        $this->assertNotNull($ecotoneLite->getMessageChannel('customErrorChannel')->receive());
+    }
+
+    public function test_default_error_channel_on_consumer_with_dead_letter_and_replay(): void
+    {
+        $topicName = 'test_topic_dead_letter_' . Uuid::v7()->toRfc4122();
+        $consumerReferenceName = 'kafka_consumer_attribute';
+        $failureCount = 0;
+
+        $consumer = new class () {
+            public int $failureCount = 0;
+            private array $processedMessages = [];
+
+            #[KafkaConsumer('kafka_consumer_attribute', 'testTopicDeadLetter')]
+            public function handle(#[\Ecotone\Messaging\Attribute\Parameter\Payload] string $payload): void
+            {
+                if ($this->failureCount < 1) {
+                    $this->failureCount++;
+                    throw new RuntimeException('Simulated failure');
+                }
+                $this->processedMessages[] = $payload;
+            }
+
+            #[QueryHandler('consumer.getProcessedMessages')]
+            public function getProcessedMessages(): array
+            {
+                return $this->processedMessages;
+            }
+        };
+
+        $dbalConnectionFactory = new DbalConnectionFactory(getenv('DATABASE_DSN') ?: 'pgsql://ecotone:secret@database:5432/ecotone');
+        $this->cleanDeadLetterTable($dbalConnectionFactory);
+
+        $ecotoneLite = EcotoneLite::bootstrapFlowTesting(
+            [$consumer::class],
+            [
+                KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
+                DbalConnectionFactory::class => $dbalConnectionFactory,
+                'managerRegistry' => $dbalConnectionFactory,
+                $consumer,
+            ],
+            ServiceConfiguration::createWithDefaults()
+                ->withDefaultErrorChannel(DbalDeadLetterBuilder::STORE_CHANNEL)
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE, ModulePackageList::DBAL_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('testTopicDeadLetter', $topicName),
+                    KafkaConsumerConfiguration::createWithDefaults($consumerReferenceName),
+                    DbalConfiguration::createWithDefaults()
+                        ->withAutomaticTableInitialization(true),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE,
+            pathToRootCatalog: __DIR__ . '/../../',
+        );
+
+        $payload = Uuid::v7()->toRfc4122();
+        $messagePublisher = $ecotoneLite->getGateway(MessagePublisher::class);
+        $messagePublisher->send($payload);
+
+        $ecotoneLite->run($consumerReferenceName, ExecutionPollingMetadata::createWithTestingSetup(
+            maxExecutionTimeInMilliseconds: 30000,
+            failAtError: false,
+        ));
+
+        /** @var DeadLetterGateway $deadLetter */
+        $deadLetter = $ecotoneLite->getGateway(DeadLetterGateway::class);
+        $this->assertEquals(1, $deadLetter->count());
+
+        $deadLetter->replyAll();
+        $this->assertEquals(0, $deadLetter->count());
+
+        $ecotoneLite->run($consumerReferenceName, ExecutionPollingMetadata::createWithTestingSetup(
+            maxExecutionTimeInMilliseconds: 30000,
+            failAtError: false,
+        ));
+
+        $processedMessages = $ecotoneLite->sendQueryWithRouting('consumer.getProcessedMessages');
+        $this->assertCount(1, $processedMessages);
+        $this->assertEquals($payload, $processedMessages[0]);
+    }
+
+    public function test_inbound_channel_adapter_failure_lands_in_dead_letter_and_replays_back_to_handler(): void
+    {
+        $topicName = 'test_topic_replayable_' . Uuid::v7()->toRfc4122();
+        $handler = new class () {
+            public const ENDPOINT_ID = 'replayable_kafka_consumer';
+            public const TOPIC_REFERENCE = 'replayableKafkaTopic';
+
+            public bool $shouldFail = true;
+            public int $invocations = 0;
+            /** @var string[] */
+            public array $processedPayloads = [];
+
+            #[KafkaConsumer(self::ENDPOINT_ID, self::TOPIC_REFERENCE)]
+            public function handle(#[\Ecotone\Messaging\Attribute\Parameter\Payload] string $payload): void
+            {
+                $this->invocations++;
+                if ($this->shouldFail) {
+                    throw new RuntimeException('simulated');
+                }
+                $this->processedPayloads[] = $payload;
+            }
+        };
+
+        $dbalConnectionFactory = new DbalConnectionFactory(getenv('DATABASE_DSN') ?: 'pgsql://ecotone:secret@database:5432/ecotone');
+        $this->cleanDeadLetterTable($dbalConnectionFactory);
+
+        $ecotoneLite = EcotoneLite::bootstrapFlowTesting(
+            [$handler::class],
+            [
+                KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
+                DbalConnectionFactory::class => $dbalConnectionFactory,
+                'managerRegistry' => $dbalConnectionFactory,
+                $handler,
+            ],
+            ServiceConfiguration::createWithDefaults()
+                ->withDefaultErrorChannel(DbalDeadLetterBuilder::STORE_CHANNEL)
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE, ModulePackageList::DBAL_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('replayableKafkaTopic', $topicName),
+                    KafkaConsumerConfiguration::createWithDefaults('replayable_kafka_consumer'),
+                    DbalConfiguration::createWithDefaults()
+                        ->withAutomaticTableInitialization(true),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE,
+            pathToRootCatalog: __DIR__ . '/../../',
+        );
+
+        $payload = Uuid::v7()->toRfc4122();
+        $messagePublisher = $ecotoneLite->getGateway(MessagePublisher::class);
+        $messagePublisher->send($payload);
+
+        $ecotoneLite->run('replayable_kafka_consumer', ExecutionPollingMetadata::createWithTestingSetup(
+            maxExecutionTimeInMilliseconds: 30000,
+            failAtError: false,
+        ));
+
+        /** @var DeadLetterGateway $deadLetter */
+        $deadLetter = $ecotoneLite->getGateway(DeadLetterGateway::class);
+        $this->assertEquals(1, $deadLetter->count(), 'Failed Kafka Message must land in DBAL Dead Letter');
+        $this->assertSame(1, $handler->invocations);
+        $this->assertSame([], $handler->processedPayloads);
+
+        $handler->shouldFail = false;
+        $deadLetter->replyAll();
+
+        $this->assertEquals(0, $deadLetter->count());
+        $this->assertSame(2, $handler->invocations, 'replyAll() must synchronously re-invoke the handler via MessagingEntrypoint — no second run() needed');
+        $this->assertSame([$payload], $handler->processedPayloads, 'Replayed Message must carry the original payload back to the handler');
+
+        $ecotoneLite->run('replayable_kafka_consumer', ExecutionPollingMetadata::createWithTestingSetup(
+            maxExecutionTimeInMilliseconds: 30000,
+            failAtError: false,
+        ));
+
+        $this->assertSame(2, $handler->invocations, 'Replayed Message must not be re-consumed from the Kafka topic (committed)');
+        $this->assertSame([$payload], $handler->processedPayloads, 'Processed payloads must remain unchanged after a second poll');
     }
 
     public function test_convert_and_send(): void
@@ -338,13 +484,13 @@ final class KafkaChannelAdapterTest extends TestCase
                 new ExampleKafkaConsumer(),
                 new JsonEncodingConverter(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName, MessagePublisher::class, KafkaBrokerConfiguration::class, MediaType::APPLICATION_JSON),
-                TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
-                KafkaConsumerConfiguration::createWithDefaults('exampleConsumer'),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName, MessagePublisher::class, KafkaBrokerConfiguration::class, MediaType::APPLICATION_JSON),
+                    TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
+                    KafkaConsumerConfiguration::createWithDefaults('exampleConsumer'),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -356,8 +502,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->convertAndSend($stdClass);
 
         $ecotoneLite->run('exampleConsumer', ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         ));
 
         $messages = $ecotoneLite->sendQueryWithRouting('getMessages');
@@ -376,16 +521,25 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new KafkaConsumerWithDelayedRetryExample(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName)->withHeaderMapper('*'),
-                TopicConfiguration::createWithReferenceName('testTopicDelayedRetry', $topicName),
-                SimpleMessageChannelBuilder::createQueueChannel('delayedRetryChannel'),
-                ErrorHandlerConfiguration::createWithDeadLetterChannel(errorChannelName:'delayedRetryChannel', delayedRetryTemplate:RetryTemplateBuilder::exponentialBackOff(initialDelayInMilliseconds:100, multiplier:2)->maxRetries(2), deadLetterChannel:'dbal_dead_letter'),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
-            licenceKey: LicenceTesting::VALID_LICENCE,
-            environment: 'prod',
+            ServiceConfiguration::createWithDefaults()
+                ->withEnvironment('prod')
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName)
+                        ->withHeaderMapper('*'),
+                    TopicConfiguration::createWithReferenceName('testTopicDelayedRetry', $topicName),
+                    SimpleMessageChannelBuilder::createQueueChannel('delayedRetryChannel'),
+                    // Configure delayed retry with exponential backoff
+                    ErrorHandlerConfiguration::createWithDeadLetterChannel(
+                        errorChannelName: 'delayedRetryChannel',
+                        delayedRetryTemplate: RetryTemplateBuilder::exponentialBackoff(
+                            initialDelay: 100,  // 100ms initial delay for testing
+                            multiplier: 2       // Each retry is 2x longer (100ms, 200ms, 400ms...)
+                        )->maxRetryAttempts(2), // Maximum 2 delayed retry attempts
+                        deadLetterChannel: 'dbal_dead_letter'
+                    ),
+                ]),
+            licenceKey: LicenceTesting::VALID_LICENCE
         );
 
         $payload = Uuid::v7()->toRfc4122();
@@ -393,7 +547,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $messagePublisher->sendWithMetadata($payload, metadata: ['fail' => true]);
 
         // First run: Instant retry (2 attempts: original + 1 retry)
-        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(stopOnError: false));
+        $ecotoneLite->run($endpointId, ExecutionPollingMetadata::createWithTestingSetup(failAtError: false));
         $attempts = $ecotoneLite->sendQueryWithRouting('consumer.getDelayedRetryAttempts');
         $this->assertCount(2, $attempts, 'Should have 2 attempts from instant retry (original + 1 instant retry)');
         $this->assertEquals($payload, $attempts[0]['payload']);
@@ -401,7 +555,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $this->assertEquals(2, $attempts[1]['attempt']);
 
         // Verify message was sent to error channel for delayed retry
-        $errorMessage = ChannelTestSupport::of($ecotoneLite)->getMessageChannel('delayedRetryChannel')->receive();
+        $errorMessage = $ecotoneLite->getMessageChannel('delayedRetryChannel')->receive();
         $this->assertNotNull($errorMessage, 'Message should be in delayed retry channel after instant retries exhausted');
 
         // Verify failure count after instant retries
@@ -426,13 +580,13 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new ExampleKafkaConsumer(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName),
-                TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
-                KafkaConsumerConfiguration::createWithDefaults('exampleConsumer'),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName),
+                    TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
+                    KafkaConsumerConfiguration::createWithDefaults('exampleConsumer'),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -442,8 +596,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->sendWithMetadata('exampleData', 'application/text', ['key' => 'value']);
 
         $ecotoneLite->run('exampleConsumer', ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         ));
 
         $messages = $ecotoneLite->sendQueryWithRouting('getMessages');
@@ -461,12 +614,12 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 new ExampleKafkaConsumer(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName),
-                TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::ASYNCHRONOUS_PACKAGE, ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName),
+                    TopicConfiguration::createWithReferenceName('exampleTopic', $topicName),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -476,8 +629,7 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->sendWithMetadata('exampleData', 'application/text', ['key' => 'value']);
 
         $ecotoneLite->run('exampleConsumer', ExecutionPollingMetadata::createWithTestingSetup(
-            handledMessageLimit: 1,
-            executionTimeLimitInMilliseconds: 30000
+            maxExecutionTimeInMilliseconds: 30000
         ));
 
         $messages = $ecotoneLite->sendQueryWithRouting('getMessages');
@@ -512,11 +664,11 @@ final class KafkaChannelAdapterTest extends TestCase
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
                 $consumer,
             ],
-            extensionObjects: [
-                TopicConfiguration::createWithReferenceName('orders', $topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    TopicConfiguration::createWithReferenceName('orders', $topicName),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -536,11 +688,11 @@ final class KafkaChannelAdapterTest extends TestCase
             [
                 KafkaBrokerConfiguration::class => ConnectionTestCase::getConnection(),
             ],
-            extensionObjects: [
-                KafkaPublisherConfiguration::createWithDefaults($topicName),
-                InstantRetryConfiguration::createWithDefaults()->withAsynchronousEndpointsRetry(false),
-            ],
-            enabledModules: [ModulePackageList::KAFKA_PACKAGE],
+            ServiceConfiguration::createWithDefaults()
+                ->withSkippedModulePackageNames(ModulePackageList::allPackagesExcept([ModulePackageList::KAFKA_PACKAGE]))
+                ->withExtensionObjects([
+                    KafkaPublisherConfiguration::createWithDefaults($topicName),
+                ]),
             licenceKey: LicenceTesting::VALID_LICENCE,
         );
 
@@ -549,5 +701,14 @@ final class KafkaChannelAdapterTest extends TestCase
         $kafkaPublisher->send('test-payload');
 
         $this->assertTrue(true);
+    }
+
+    private function cleanDeadLetterTable(DbalConnectionFactory $connectionFactory): void
+    {
+        $connection = $connectionFactory->createContext()->getDbalConnection();
+        $schemaManager = method_exists($connection, 'getSchemaManager') ? $connection->getSchemaManager() : $connection->createSchemaManager();
+        if ($schemaManager->tablesExist(['ecotone_error_messages'])) {
+            $connection->executeStatement('DELETE FROM ecotone_error_messages');
+        }
     }
 }

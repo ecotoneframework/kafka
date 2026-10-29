@@ -2,20 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Ecotone\Api\Kafka;
+namespace Ecotone\Kafka\Configuration;
 
-use Ecotone\Api\Gateway\MessagePublisher;
 use Ecotone\Messaging\Config\Container\DefinedObject;
 use Ecotone\Messaging\Config\Container\Definition;
 use Ecotone\Messaging\MessageConverter\DefaultHeaderMapper;
 use Ecotone\Messaging\MessageConverter\HeaderMapper;
+use Ecotone\Messaging\MessagePublisher;
 use Ecotone\Messaging\Support\Assert;
 use RdKafka\Conf;
 
 /**
  * licence Enterprise
- *
- * Use requires an Ecotone Enterprise licence (see LICENSE-ENTERPRISE; trial: https://ecotone.tech/pricing).
  *
  * @link https://docs.confluent.io/platform/current/installation/configuration/producer-configs.html
  */
@@ -29,10 +27,10 @@ final class KafkaPublisherConfiguration implements DefinedObject
      * @param array<string, string> $configuration
      */
     public function __construct(
-        public readonly string $defaultTopicName,
+        private string $defaultTopicName,
         private string $referenceName,
         private array  $configuration,
-        public readonly string $brokerConfigurationReference,
+        private string $brokerConfigurationReference,
         private HeaderMapper $headerMapper,
         private ?string $outputDefaultConversionMediaType = null,
         private bool $batchPublishing = false,
@@ -110,7 +108,9 @@ final class KafkaPublisherConfiguration implements DefinedObject
     }
 
     /**
-     * @link https://docs.ecotone.tech/modelling/microservices-php/message-publisher#high-throughput-publishing-enterprise
+     * @param bool $batchPublishing coalesces produced Messages into broker side batches by enabling producer lingering
+     * @param bool $nonBlockingConfirmation produces without flushing, delivery reports are awaited on Future::resolve() or before the surrounding Command Bus or asynchronous endpoint finishes
+     * @param int|null $confirmationTimeoutInMilliseconds how long to await delivery reports before treating the delivery as failed
      */
     public function withHighThroughputPublishing(bool $batchPublishing = true, bool $nonBlockingConfirmation = true, ?int $confirmationTimeoutInMilliseconds = null): self
     {
@@ -144,6 +144,11 @@ final class KafkaPublisherConfiguration implements DefinedObject
         return $this->outputDefaultConversionMediaType;
     }
 
+    public function getBrokerConfigurationReference(): string
+    {
+        return $this->brokerConfigurationReference;
+    }
+
     public function getAsKafkaConfig(): Conf
     {
         $configuration = $this->configuration;
@@ -157,6 +162,11 @@ final class KafkaPublisherConfiguration implements DefinedObject
         }
 
         return $conf;
+    }
+
+    public function getDefaultTopicName(): string
+    {
+        return $this->defaultTopicName;
     }
 
     public function getReferenceName(): string

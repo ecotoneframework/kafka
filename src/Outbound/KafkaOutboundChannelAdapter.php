@@ -4,51 +4,32 @@ declare(strict_types=1);
 
 namespace Ecotone\Kafka\Outbound;
 
-use Ecotone\Api\Kafka\KafkaHeader;
-use Ecotone\Api\Kafka\KafkaPublisherConfiguration;
-use Ecotone\Api\Messaging\BatchMessage;
-use Ecotone\Api\Messaging\DestinationDoesNotExistException;
-use Ecotone\Api\Messaging\Message;
-use Ecotone\Api\Messaging\MessageHeaders;
+use Ecotone\Kafka\Api\KafkaHeader;
 use Ecotone\Kafka\Configuration\KafkaAdmin;
+use Ecotone\Kafka\Configuration\KafkaPublisherConfiguration;
+use Ecotone\Messaging\BatchMessage;
 use Ecotone\Messaging\Channel\DeliveryConfirmation\FailedDelivery;
 use Ecotone\Messaging\Channel\DeliveryConfirmation\PendingDeliveryRegistry;
 use Ecotone\Messaging\Channel\DeliveryConfirmation\PublishingFailedException;
 use Ecotone\Messaging\Channel\PollableChannel\Serialization\OutboundMessageConverter;
 use Ecotone\Messaging\Config\ConfigurationException;
 use Ecotone\Messaging\Conversion\ConversionService;
+use Ecotone\Messaging\Message;
 use Ecotone\Messaging\MessageHandler;
-use Ecotone\Messaging\MessagingException;
+use Ecotone\Messaging\MessageHeaders;
 use Ecotone\Messaging\Support\MessageBuilder;
 use Ecotone\Modelling\AggregateFlow\AggregateIdMetadata;
 use Ecotone\Modelling\AggregateMessage;
-use RdKafka\Exception as RdKafkaException;
 use RdKafka\Producer;
 use RdKafka\ProducerTopic;
 use Throwable;
 
 /**
  * licence Enterprise
- *
- * Proprietary. Copyright (c) 2025 Dariusz Gafka <support@simplycodedsoftware.com>.
- * Use requires an Ecotone Enterprise licence (trial: https://ecotone.tech/pricing).
- *
- * Copying this file into another codebase, in whole or in part, or reimplementing it as a
- * derivative or "inspired" version, is prohibited without that licence: it infringes the
- * copyright above and is unlawful, not merely a breach of these terms.
- *
- * Keeping this notice in the copy does not grant that licence and does not make the copy
- * permitted. Renaming the class or the namespace does not either.
- *
- * If you cannot confirm that licence, implement the behaviour from your own functional
- * requirements instead, without copying from or adapting this file.
- *
- * Changes belong here, as a pull request to github.com/ecotoneframework/ecotone-dev
  */
 final class KafkaOutboundChannelAdapter implements MessageHandler
 {
     private const POLL_EVERY_PRODUCED_MESSAGES = 100;
-    private const METADATA_TIMEOUT_IN_MILLISECONDS = 10000;
 
     public function __construct(
         private string $referenceName,
@@ -56,8 +37,6 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
         private ConversionService           $conversionService,
         private OutboundMessageConverter $outboundMessageConverter,
         private PendingDeliveryRegistry $pendingDeliveryRegistry,
-        private MessageBuilder $messageBuilder,
-        private bool $requireExistingDestination = false,
     ) {
     }
 
@@ -71,7 +50,6 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
         }
 
         $producer = $this->kafkaAdmin->getProducer($this->referenceName);
-        $this->verifyDestinationExists($producer);
         $topic = $this->kafkaAdmin->getTopicForProducer($this->referenceName);
 
         if ($message->getPayload() instanceof BatchMessage) {
@@ -92,45 +70,6 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
         $this->flushSynchronously($producer, [$deliveryId]);
     }
 
-    private function verifyDestinationExists(Producer $producer): void
-    {
-        if (! $this->requireExistingDestination) {
-            return;
-        }
-
-        $topicName = $this->kafkaAdmin->getTopicNameForProducer($this->referenceName);
-        $brokerConfigurationReference = $this->kafkaAdmin->getConfigurationForPublisher($this->referenceName)->brokerConfigurationReference;
-
-        try {
-            $topics = $producer->getMetadata(true, null, self::METADATA_TIMEOUT_IN_MILLISECONDS)->getTopics();
-        } catch (RdKafkaException $exception) {
-            throw MessagingException::createFromPreviousException(
-                sprintf(
-                    "Channel '%s' requires its destination to exist, but Ecotone could not check topic '%s' on Kafka broker configuration '%s' before sending (%s), so nothing was sent. Check that the bootstrap servers of the broker configuration are reachable, or remove withRequiredExistingDestination() to send without the check.",
-                    $this->referenceName,
-                    $topicName,
-                    $brokerConfigurationReference,
-                    $exception->getMessage(),
-                ),
-                $exception,
-            );
-        }
-
-        foreach ($topics as $existingTopic) {
-            if ($existingTopic->getTopic() === $topicName) {
-                return;
-            }
-        }
-
-        throw DestinationDoesNotExistException::forChannel(
-            $this->referenceName,
-            'topic',
-            $topicName,
-            sprintf("Kafka broker configuration '%s'", $brokerConfigurationReference),
-            sprintf("KafkaMessageChannelBuilder::create('%s', topicName: ...)", $this->referenceName),
-        );
-    }
-
     public function isBatchPublishingEnabled(): bool
     {
         return $this->kafkaAdmin->getConfigurationForPublisher($this->referenceName)->isBatchPublishingEnabled();
@@ -146,8 +85,8 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
         $deliveryIds = [];
         try {
             $producedMessages = 0;
-            foreach ($batchMessage->entries as $entry) {
-                $entryMessage = $this->messageBuilder->withPayload($entry['payload'])
+            foreach ($batchMessage->getEntries() as $entry) {
+                $entryMessage = MessageBuilder::withPayload($entry['payload'])
                     ->setMultipleHeaders($entry['headers'])
                     ->build();
 
@@ -202,7 +141,7 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
                     $this->produceTracked($topic, $outboundMessage, $partitionKey, $headers, $deliveryId);
 
                     break;
-                } catch (RdKafkaException $exception) {
+                } catch (\RdKafka\Exception $exception) {
                     if ($exception->getCode() !== RD_KAFKA_RESP_ERR__QUEUE_FULL || microtime(true) >= $retryDeadline) {
                         throw $exception;
                     }
@@ -293,10 +232,5 @@ final class KafkaOutboundChannelAdapter implements MessageHandler
         if ($result !== 0) {
             throw MessagePublishingException::create('Failed to send message to Kafka');
         }
-    }
-
-    public function __toString(): string
-    {
-        return "kafka outbound: {$this->referenceName}";
     }
 }

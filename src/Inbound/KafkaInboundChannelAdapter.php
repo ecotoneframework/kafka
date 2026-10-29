@@ -4,32 +4,17 @@ declare(strict_types=1);
 
 namespace Ecotone\Kafka\Inbound;
 
-use Ecotone\Api\ExtensionObject\PollingMetadata;
-use Ecotone\Api\Messaging\Message;
-use Ecotone\Api\Messaging\MessageHeaders;
-use Ecotone\Api\Messaging\MessagePoller;
 use Ecotone\Kafka\Configuration\KafkaAdmin;
 use Ecotone\Messaging\Conversion\ConversionService;
+use Ecotone\Messaging\Endpoint\PollingMetadata;
 use Ecotone\Messaging\Handler\Logger\LoggingGateway;
+use Ecotone\Messaging\Message;
+use Ecotone\Messaging\MessageHeaders;
+use Ecotone\Messaging\MessagePoller;
 use Ecotone\Messaging\MessagingException;
 
 /**
  * licence Enterprise
- *
- * Proprietary. Copyright (c) 2025 Dariusz Gafka <support@simplycodedsoftware.com>.
- * Use requires an Ecotone Enterprise licence (trial: https://ecotone.tech/pricing).
- *
- * Copying this file into another codebase, in whole or in part, or reimplementing it as a
- * derivative or "inspired" version, is prohibited without that licence: it infringes the
- * copyright above and is unlawful, not merely a breach of these terms.
- *
- * Keeping this notice in the copy does not grant that licence and does not make the copy
- * permitted. Renaming the class or the namespace does not either.
- *
- * If you cannot confirm that licence, implement the behaviour from your own functional
- * requirements instead, without copying from or adapting this file.
- *
- * Changes belong here, as a pull request to github.com/ecotoneframework/ecotone-dev
  */
 final class KafkaInboundChannelAdapter implements MessagePoller
 {
@@ -50,7 +35,7 @@ final class KafkaInboundChannelAdapter implements MessagePoller
     public function receiveWithTimeout(PollingMetadata $pollingMetadata): ?Message
     {
         $endpointId = $pollingMetadata->getEndpointId();
-        $channelName = $pollingMetadata->polledChannelName ?? $this->channelName;
+        $channelName = $pollingMetadata->getPolledChannelName() ?? $this->channelName;
         $consumer = $this->kafkaAdmin->getConsumer($endpointId, $channelName);
 
         if ($this->batchCommitCoordinator === null || $this->batchCommitCoordinator->consumer !== $consumer) {
@@ -62,8 +47,8 @@ final class KafkaInboundChannelAdapter implements MessagePoller
             );
         }
 
-        $timeoutInMilliseconds = $pollingMetadata->executionTimeLimitInMilliseconds > 0
-            ? min($pollingMetadata->executionTimeLimitInMilliseconds, $this->receiveTimeoutInMilliseconds)
+        $timeoutInMilliseconds = $pollingMetadata->getExecutionTimeLimitInMilliseconds() > 0
+            ? min($pollingMetadata->getExecutionTimeLimitInMilliseconds(), $this->receiveTimeoutInMilliseconds)
             : $this->receiveTimeoutInMilliseconds;
         if ($timeoutInMilliseconds <= self::MINIMUM_REQUIRED_TIME_FOR_LOAD_BALANCING) {
             $timeoutInMilliseconds = self::MINIMUM_REQUIRED_TIME_FOR_LOAD_BALANCING;

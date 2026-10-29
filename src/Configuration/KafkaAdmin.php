@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Ecotone\Kafka\Configuration;
 
-use Ecotone\Api\Kafka\KafkaBrokerConfiguration;
-use Ecotone\Api\Kafka\KafkaConsumer as KafkaConsumerAttribute;
-use Ecotone\Api\Kafka\KafkaPublisherConfiguration;
+use Ecotone\Kafka\Attribute\KafkaConsumer as KafkaConsumerAttribute;
 use Ecotone\Kafka\Outbound\KafkaDeliveryTracker;
 use Ecotone\Messaging\Config\ConfigurationException;
 use Ecotone\Messaging\Handler\ExpressionEvaluationService;
@@ -19,21 +17,6 @@ use RdKafka\TopicConf;
 
 /**
  * licence Enterprise
- *
- * Proprietary. Copyright (c) 2025 Dariusz Gafka <support@simplycodedsoftware.com>.
- * Use requires an Ecotone Enterprise licence (trial: https://ecotone.tech/pricing).
- *
- * Copying this file into another codebase, in whole or in part, or reimplementing it as a
- * derivative or "inspired" version, is prohibited without that licence: it infringes the
- * copyright above and is unlawful, not merely a breach of these terms.
- *
- * Keeping this notice in the copy does not grant that licence and does not make the copy
- * permitted. Renaming the class or the namespace does not either.
- *
- * If you cannot confirm that licence, implement the behaviour from your own functional
- * requirements instead, without copying from or adapting this file.
- *
- * Changes belong here, as a pull request to github.com/ecotoneframework/ecotone-dev
  */
 final class KafkaAdmin
 {
@@ -104,8 +87,8 @@ final class KafkaAdmin
             $conf = $configuration->getConfig();
             $kafkaConsumerConfig = $this->getConsumerConfiguration($endpointId, $channelName);
 
-            $conf->set('group.id', $kafkaConsumerConfig->groupId);
-            $conf->set('metadata.broker.list', implode(',', $kafkaBrokerConfiguration->bootstrapServers));
+            $conf->set('group.id', $kafkaConsumerConfig->getGroupId());
+            $conf->set('metadata.broker.list', implode(',', $kafkaBrokerConfiguration->getBootstrapServers()));
             $this->setLoggerCallbacks($conf, $endpointId);
             $consumer = new KafkaConsumer($conf);
 
@@ -116,25 +99,6 @@ final class KafkaAdmin
         }
 
         return $this->initializedConsumers[$consumerKey];
-    }
-
-    /**
-     * @return array{consumer: KafkaConsumer, topics: string[]}
-     */
-    public function createGroupInspector(string $channelName): array
-    {
-        $configuration = $this->getRdKafkaConfiguration($channelName);
-        $kafkaBrokerConfiguration = $this->kafkaBrokerConfigurations[$configuration->getBrokerConfigurationReference()];
-        $conf = $configuration->getConfig();
-        $kafkaConsumerConfig = $this->getConsumerConfiguration($channelName, $channelName);
-
-        $conf->set('group.id', $kafkaConsumerConfig->groupId);
-        $conf->set('metadata.broker.list', implode(',', $kafkaBrokerConfiguration->bootstrapServers));
-
-        return [
-            'consumer' => new KafkaConsumer($conf),
-            'topics' => $this->getMappedTopicNames($this->resolveExpressions($kafkaConsumerConfig->getTopics())),
-        ];
     }
 
     public function closeAllConsumers(): void
@@ -174,7 +138,7 @@ final class KafkaAdmin
         if (! array_key_exists($referenceName, $this->initializedProducers)) {
             $configuration = $this->getConfigurationForPublisher($referenceName);
             $conf = $configuration->getAsKafkaConfig();
-            $conf->set('metadata.broker.list', implode(',', $this->kafkaBrokerConfigurations[$configuration->brokerConfigurationReference]->bootstrapServers));
+            $conf->set('metadata.broker.list', implode(',', $this->kafkaBrokerConfigurations[$configuration->getBrokerConfigurationReference()]->getBootstrapServers()));
             $this->setLoggerCallbacks($conf, $referenceName);
             $deliveryTracker = $this->getDeliveryTracker($referenceName);
             $conf->setDrMsgCb(
@@ -183,7 +147,7 @@ final class KafkaAdmin
                 }
             );
             $producer = new Producer($conf);
-            $producer->addBrokers(implode(',', $this->kafkaBrokerConfigurations[$configuration->brokerConfigurationReference]->bootstrapServers));
+            $producer->addBrokers(implode(',', $this->kafkaBrokerConfigurations[$configuration->getBrokerConfigurationReference()]->getBootstrapServers()));
 
             $this->initializedProducers[$referenceName] = $producer;
         }
@@ -196,15 +160,10 @@ final class KafkaAdmin
         return $this->deliveryTrackers[$referenceName] ??= new KafkaDeliveryTracker();
     }
 
-    public function getTopicNameForProducer(string $referenceName): string
-    {
-        return $this->getMappedTopicNames($this->getConfigurationForPublisher($referenceName)->defaultTopicName);
-    }
-
     public function getTopicForProducer(string $referenceName): ProducerTopic
     {
         $producer = $this->getProducer($referenceName);
-        $topicName = $this->getTopicNameForProducer($referenceName);
+        $topicName = $this->getMappedTopicNames($this->getConfigurationForPublisher($referenceName)->getDefaultTopicName());
 
         return $producer->newTopic(
             $topicName,
@@ -263,7 +222,7 @@ final class KafkaAdmin
             $defaultChannelConfig = $this->consumerConfigurations[$channelName];
 
             if ($this->isUsedAsInputChannelForDifferentEndpoint($defaultChannelConfig, $endpointId)) {
-                return $defaultChannelConfig->changeGroupId($defaultChannelConfig->groupId . '_' . $endpointId);
+                return $defaultChannelConfig->changeGroupId($defaultChannelConfig->getGroupId() . '_' . $endpointId);
             }
 
             return $defaultChannelConfig;
